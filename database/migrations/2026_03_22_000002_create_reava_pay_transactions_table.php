@@ -40,7 +40,7 @@ return new class extends Migration
             $table->timestamp('failed_at')->nullable();
             $table->timestamps();
 
-            $table->index(['payer_type', 'payer_id']);
+            // nullableMorphs already creates indexes for payer
             $table->index(['payable_type', 'payable_id']);
         });
     }
