@@ -28,4 +28,5 @@ Route::prefix($prefix)->name('reava-pay.admin.')->middleware($middleware)->group
     Route::get('/transactions', [AdminController::class, 'transactions'])->name('transactions');
     Route::get('/transactions/{id}', [AdminController::class, 'transactionDetail'])->name('transactions.detail');
     Route::post('/transactions/{id}/sync', [AdminController::class, 'syncTransaction'])->name('transactions.sync');
+    Route::post('/collect-payment', [AdminController::class, 'collectPayment'])->name('collect-payment');
 });

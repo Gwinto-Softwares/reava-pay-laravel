@@ -241,6 +241,86 @@ class AdminController extends Controller
 
     // ─── Helpers ──────────────────────────────────────────
 
+    /**
+     * Initiate an M-Pesa STK push payment for an invoice.
+     */
+    public function collectPayment(Request $request)
+    {
+        $request->validate([
+            'invoice_id' => 'required|integer',
+            'phone' => 'required|string',
+            'amount' => 'required|numeric|min:1',
+        ]);
+
+        $settings = ReavaPaySetting::instance();
+
+        if (!$settings->hasValidCredentials()) {
+            return back()->with('rp_error', 'Reava Pay is not connected. Go to Settings > Reava Pay to connect.');
+        }
+
+        // Normalize phone
+        $phone = preg_replace('/[^0-9]/', '', $request->phone);
+        if (strlen($phone) === 9) $phone = '254' . $phone;
+        elseif (strlen($phone) === 10 && $phone[0] === '0') $phone = '254' . substr($phone, 1);
+
+        $reference = 'INV-PAY-' . $request->invoice_id . '-' . date('YmdHis') . '-' . strtoupper(substr(uniqid(), -4));
+
+        // Create local transaction record
+        $txn = ReavaPayTransaction::create([
+            'payer_type' => null,
+            'payer_id' => null,
+            'type' => ReavaPayTransaction::TYPE_INVOICE,
+            'channel' => 'mpesa',
+            'amount' => $request->amount,
+            'charge_amount' => 0,
+            'net_amount' => $request->amount,
+            'currency' => 'KES',
+            'status' => ReavaPayTransaction::STATUS_PENDING,
+            'local_reference' => $reference,
+            'phone' => $phone,
+            'account_reference' => $reference,
+            'description' => 'Invoice payment: INV #' . $request->invoice_id,
+            'payable_type' => 'App\\Models\\Invoice',
+            'payable_id' => $request->invoice_id,
+            'callback_url' => url(config('reava-pay.webhook_path', 'webhooks/reava-pay')),
+            'initiated_at' => now(),
+            'metadata' => [
+                'invoice_id' => $request->invoice_id,
+                'initiated_by' => auth()->id(),
+            ],
+        ]);
+
+        try {
+            $manager = new ReavaPayManager($settings->api_secret, $settings->base_url);
+            $result = $manager->collections()->create([
+                'amount' => $request->amount,
+                'currency' => 'KES',
+                'channel' => 'mpesa',
+                'phone' => $phone,
+                'account_reference' => $reference,
+                'description' => 'NPV Invoice Payment',
+                'callback_url' => url(config('reava-pay.webhook_path', 'webhooks/reava-pay')),
+                'metadata' => [
+                    'local_reference' => $reference,
+                    'invoice_id' => $request->invoice_id,
+                    'source' => config('app.name', 'NPV'),
+                ],
+            ]);
+
+            $txn->update([
+                'status' => ReavaPayTransaction::STATUS_PROCESSING,
+                'reava_reference' => $result->data->reference ?? null,
+                'reava_response' => (array) $result->data,
+            ]);
+
+            return back()->with('rp_success', 'M-Pesa payment request sent to ' . $phone . '. The member will receive an STK push prompt on their phone.');
+        } catch (\Throwable $e) {
+            $txn->markAsFailed($e->getMessage());
+            Log::error('Reava Pay collection failed', ['error' => $e->getMessage(), 'invoice_id' => $request->invoice_id]);
+            return back()->with('rp_error', 'Payment request failed: ' . $e->getMessage());
+        }
+    }
+
     private function getCredentialsForDisplay(ReavaPaySetting $settings): ?array
     {
         if (!$settings->exists || !$settings->is_verified) {
